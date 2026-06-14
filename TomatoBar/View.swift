@@ -126,7 +126,306 @@ private struct SoundsView: View {
 }
 
 private enum ChildView {
-    case intervals, settings, sounds
+    case intervals, settings, sounds, sessions, stats
+}
+
+private let tomatoColor = Color(red: 0.92, green: 0.34, blue: 0.27)
+
+// MARK: - Stats dashboard
+
+/// A single completed day in the stats window.
+private struct TBDayBucket: Identifiable {
+    let id = UUID()
+    let date: Date
+    let count: Int
+    let isToday: Bool
+}
+
+/// Derived statistics computed from the full persisted sessions history.
+private struct TBStats {
+    let todayCount: Int
+    let weekCount: Int
+    let totalCount: Int
+    let totalFocusSeconds: Double
+    let streak: Int
+    let week: [TBDayBucket]
+    let firstDate: Date?
+
+    static let empty = TBStats(todayCount: 0, weekCount: 0, totalCount: 0,
+                               totalFocusSeconds: 0, streak: 0, week: [], firstDate: nil)
+
+    init(todayCount: Int, weekCount: Int, totalCount: Int, totalFocusSeconds: Double,
+         streak: Int, week: [TBDayBucket], firstDate: Date?) {
+        self.todayCount = todayCount
+        self.weekCount = weekCount
+        self.totalCount = totalCount
+        self.totalFocusSeconds = totalFocusSeconds
+        self.streak = streak
+        self.week = week
+        self.firstDate = firstDate
+    }
+
+    init(from sessions: [TBCompletedSession]) {
+        guard !sessions.isEmpty else { self = .empty; return }
+        let cal = Calendar.current
+
+        // Bucket counts by local calendar day.
+        var counts: [Date: Int] = [:]
+        var focus: Double = 0
+        for s in sessions {
+            let day = cal.startOfDay(for: s.end)
+            counts[day, default: 0] += 1
+            focus += max(0, s.end.timeIntervalSince(s.start))
+        }
+
+        let today = cal.startOfDay(for: Date())
+        todayCount = counts[today] ?? 0
+        totalCount = sessions.count
+        totalFocusSeconds = focus
+        firstDate = sessions.map(\.end).min()
+
+        // Last 7 calendar days, oldest → today.
+        var buckets: [TBDayBucket] = []
+        var weekSum = 0
+        for offset in stride(from: 6, through: 0, by: -1) {
+            guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { continue }
+            let c = counts[day] ?? 0
+            weekSum += c
+            buckets.append(TBDayBucket(date: day, count: c, isToday: offset == 0))
+        }
+        week = buckets
+        weekCount = weekSum
+
+        // Current streak: consecutive days with ≥1 pomodoro ending at the most
+        // recent active day (today if active, else the latest active day).
+        let activeDays = Set(counts.filter { $0.value > 0 }.keys)
+        var streakCount = 0
+        if let latest = activeDays.max() {
+            var cursor = latest
+            while activeDays.contains(cursor) {
+                streakCount += 1
+                guard let prev = cal.date(byAdding: .day, value: -1, to: cursor) else { break }
+                cursor = prev
+            }
+        }
+        streak = streakCount
+    }
+
+    var focusString: String {
+        let minutes = totalFocusSeconds / 60
+        if minutes >= 60 {
+            return String(format: "%.1fh", minutes / 60)
+        }
+        return "\(Int(minutes.rounded()))m"
+    }
+}
+
+private struct StatCard: View {
+    let value: String
+    let label: String
+    let systemImage: String
+    var tint: Color = .primary
+
+    var body: some View {
+        VStack(spacing: 1) {
+            HStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 10))
+                    .foregroundColor(tint)
+                Text(value)
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .foregroundColor(.primary)
+            }
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.gray.opacity(0.12)))
+    }
+}
+
+private struct WeekBarChart: View {
+    let week: [TBDayBucket]
+
+    private let dayFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "EEEEE" // narrow weekday: M T W T F S S
+        return df
+    }()
+    private var maxCount: Int { max(week.map(\.count).max() ?? 0, 1) }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 5) {
+            ForEach(week) { day in
+                VStack(spacing: 3) {
+                    Text(day.count > 0 ? "\(day.count)" : " ")
+                        .font(.system(size: 8).monospacedDigit())
+                        .foregroundColor(day.isToday ? tomatoColor : .secondary)
+                    ZStack(alignment: .bottom) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.gray.opacity(0.10))
+                            .frame(height: 40)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(day.isToday ? tomatoColor : tomatoColor.opacity(0.45))
+                            .frame(height: barHeight(day.count))
+                    }
+                    .frame(height: 40)
+                    Text(dayFormatter.string(from: day.date))
+                        .font(.system(size: 8))
+                        .foregroundColor(day.isToday ? tomatoColor : .secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private func barHeight(_ count: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        return max(5, 40 * CGFloat(count) / CGFloat(maxCount))
+    }
+}
+
+private struct MiniStat: View {
+    let emoji: String
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(emoji).font(.system(size: 13))
+            Text(value)
+                .font(.system(.callout, design: .rounded).weight(.semibold))
+                .foregroundColor(.primary)
+            Text(label)
+                .font(.system(size: 8))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct StatsView: View {
+    @State private var stats = TBStats.empty
+    @State private var loaded = false
+
+    private let captionFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "MMM d"
+        return df
+    }()
+
+    var body: some View {
+        Group {
+            if loaded && stats.totalCount == 0 {
+                VStack {
+                    Spacer()
+                    Text(NSLocalizedString("StatsView.empty.label",
+                                           comment: "Stats empty label"))
+                        .foregroundColor(.secondary)
+                        .font(.system(.caption))
+                        .multilineTextAlignment(.center)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                VStack(spacing: 6) {
+                    HStack(spacing: 6) {
+                        StatCard(value: "\(stats.todayCount)",
+                                 label: NSLocalizedString("StatsView.today.label",
+                                                          comment: "Today label"),
+                                 systemImage: "sun.max.fill",
+                                 tint: tomatoColor)
+                        StatCard(value: "\(stats.weekCount)",
+                                 label: NSLocalizedString("StatsView.week.label",
+                                                          comment: "This week label"),
+                                 systemImage: "calendar")
+                    }
+
+                    WeekBarChart(week: stats.week)
+
+                    Divider()
+
+                    HStack(spacing: 4) {
+                        MiniStat(emoji: "🍅", value: "\(stats.totalCount)",
+                                 label: NSLocalizedString("StatsView.total.label",
+                                                          comment: "Total label"))
+                        MiniStat(emoji: "⏱", value: stats.focusString,
+                                 label: NSLocalizedString("StatsView.focus.label",
+                                                          comment: "Focus label"))
+                        MiniStat(emoji: "🔥", value: "\(stats.streak)",
+                                 label: NSLocalizedString("StatsView.streak.label",
+                                                          comment: "Streak label"))
+                    }
+
+                    if let first = stats.firstDate {
+                        Text(String.localizedStringWithFormat(
+                            NSLocalizedString("StatsView.since.label", comment: "Since label"),
+                            captionFormatter.string(from: first)))
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .padding(4)
+        .onAppear {
+            stats = TBStats(from: TBSessionsReader.loadAll())
+            loaded = true
+        }
+    }
+}
+
+private struct SessionsView: View {
+    @EnvironmentObject var timer: TBTimer
+    private let timeFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm"
+        return df
+    }()
+
+    var body: some View {
+        Group {
+            if timer.completedSessions.isEmpty {
+                VStack {
+                    Spacer()
+                    Text(NSLocalizedString("SessionsView.empty.label",
+                                           comment: "Sessions empty label"))
+                        .foregroundColor(.secondary)
+                        .font(.system(.caption))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                ScrollView {
+                    VStack(spacing: 4) {
+                        ForEach(timer.completedSessions) { session in
+                            HStack {
+                                Text("🍅 #\(session.index)")
+                                    .font(.system(.body).monospacedDigit())
+                                Spacer()
+                                Text("\(timeFormatter.string(from: session.start))–\(timeFormatter.string(from: session.end))")
+                                    .font(.system(.body).monospacedDigit())
+                                    .foregroundColor(.secondary)
+                                Text("✓")
+                                    .foregroundColor(.green)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.gray.opacity(0.12))
+                            )
+                        }
+                    }
+                    .padding(2)
+                }
+            }
+        }
+        .padding(4)
+    }
 }
 
 struct TBPopoverView: View {
@@ -136,34 +435,84 @@ struct TBPopoverView: View {
 
     private var startLabel = NSLocalizedString("TBPopoverView.start.label", comment: "Start label")
     private var stopLabel = NSLocalizedString("TBPopoverView.stop.label", comment: "Stop label")
+    private var pauseLabel = NSLocalizedString("TBPopoverView.pause.label", comment: "Pause label")
+    private var resumeLabel = NSLocalizedString("TBPopoverView.resume.label", comment: "Resume label")
+    private var pausedLabel = NSLocalizedString("TBPopoverView.paused.label", comment: "Paused label")
+
+    private var isActive: Bool {
+        timer.timer != nil || timer.isPaused
+    }
+
+    private var defaultButtonText: String {
+        if timer.isPaused {
+            return "\(pausedLabel) \(timer.timeLeftString)"
+        }
+        if timer.timer != nil {
+            return timer.timeLeftString
+        }
+        return startLabel
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                timer.startStop()
-                TBStatusItem.shared.closePopover(nil)
-            } label: {
-                Text(timer.timer != nil ?
-                     (buttonHovered ? stopLabel : timer.timeLeftString) :
-                        startLabel)
-                    /*
-                      When appearance is set to "Dark" and accent color is set to "Graphite"
-                      "defaultAction" button label's color is set to the same color as the
-                      button, making the button look blank. #24
-                     */
-                    .foregroundColor(Color.white)
-                    .font(.system(.body).monospacedDigit())
-                    .frame(maxWidth: .infinity)
+            ZStack {
+                // Default content: countdown / start (also handles Enter via defaultAction).
+                Button {
+                    timer.startStop()
+                    TBStatusItem.shared.closePopover(nil)
+                } label: {
+                    Text(defaultButtonText)
+                        /*
+                          When appearance is set to "Dark" and accent color is set to "Graphite"
+                          "defaultAction" button label's color is set to the same color as the
+                          button, making the button look blank. #24
+                         */
+                        .foregroundColor(Color.white)
+                        .font(.system(.body).monospacedDigit())
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+                .opacity(buttonHovered && isActive ? 0 : 1)
+                .allowsHitTesting(!(buttonHovered && isActive))
+
+                // Hover-revealed actions: Pause/Resume + Stop.
+                if isActive {
+                    HStack(spacing: 6) {
+                        Button {
+                            timer.pauseResume()
+                        } label: {
+                            Text(timer.isPaused ? resumeLabel : pauseLabel)
+                                .foregroundColor(Color.white)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .controlSize(.large)
+
+                        Button {
+                            timer.startStop()
+                            TBStatusItem.shared.closePopover(nil)
+                        } label: {
+                            Text(stopLabel)
+                                .foregroundColor(Color.white)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .controlSize(.large)
+                    }
+                    .opacity(buttonHovered ? 1 : 0)
+                    .allowsHitTesting(buttonHovered)
+                }
             }
             .onHover { over in
                 buttonHovered = over
             }
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
 
             Picker("", selection: $activeChildView) {
                 Text(NSLocalizedString("TBPopoverView.intervals.label",
                                        comment: "Intervals label")).tag(ChildView.intervals)
+                Text(NSLocalizedString("TBPopoverView.sessions.label",
+                                       comment: "Sessions label")).tag(ChildView.sessions)
+                Text(NSLocalizedString("TBPopoverView.stats.label",
+                                       comment: "Stats label")).tag(ChildView.stats)
                 Text(NSLocalizedString("TBPopoverView.settings.label",
                                        comment: "Settings label")).tag(ChildView.settings)
                 Text(NSLocalizedString("TBPopoverView.sounds.label",
@@ -177,12 +526,17 @@ struct TBPopoverView: View {
                 switch activeChildView {
                 case .intervals:
                     IntervalsView().environmentObject(timer)
+                case .sessions:
+                    SessionsView().environmentObject(timer)
+                case .stats:
+                    StatsView()
                 case .settings:
                     SettingsView().environmentObject(timer)
                 case .sounds:
                     SoundsView().environmentObject(timer.player)
                 }
             }
+            .frame(height: 210)
 
             Group {
                 Button {

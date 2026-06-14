@@ -31,6 +31,14 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
     static var shared: TBStatusItem!
 
     func applicationDidFinishLaunching(_: Notification) {
+        // Ensure project-local sessions log folder exists from launch.
+        do {
+            try FileManager.default.createDirectory(at: sessionsLogsURL,
+                                                    withIntermediateDirectories: true)
+        } catch {
+            NSLog("TomatoBar: cannot create sessions folder: \(error)")
+        }
+
         let view = TBPopoverView()
 
         popover.behavior = .transient
@@ -38,7 +46,7 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         popover.contentViewController?.view = NSHostingView(rootView: view)
         if let contentViewController = popover.contentViewController {
             popover.contentSize.height = contentViewController.view.intrinsicContentSize.height
-            popover.contentSize.width = 240
+            popover.contentSize.width = 300
         }
 
         statusBarItem = NSStatusBar.system.statusItem(

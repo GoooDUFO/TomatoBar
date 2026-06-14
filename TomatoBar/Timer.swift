@@ -18,8 +18,12 @@ class TBTimer: ObservableObject {
     private var notificationCenter = TBNotificationCenter()
     private var finishTime: Date!
     private var timerFormatter = DateComponentsFormatter()
+    private var currentWorkStart: Date?
+    private var pausedRemainingSeconds: Int = 0
     @Published var timeLeftString: String = ""
     @Published var timer: DispatchSourceTimer?
+    @Published var isPaused: Bool = false
+    @Published var completedSessions: [TBCompletedSession] = []
 
     init() {
         /*
@@ -119,6 +123,33 @@ class TBTimer: ObservableObject {
         stateMachine <-! .skipRest
     }
 
+    func pauseResume() {
+        if isPaused {
+            // Resume: rebuild the timer with the saved remaining seconds
+            finishTime = Date().addingTimeInterval(TimeInterval(pausedRemainingSeconds))
+            let queue = DispatchQueue(label: "Timer")
+            timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+            timer!.schedule(deadline: .now(), repeating: .seconds(1), leeway: .never)
+            timer!.setEventHandler(handler: onTimerTick)
+            timer!.setCancelHandler(handler: onTimerCancel)
+            timer!.resume()
+            isPaused = false
+            if stateMachine.state == .work {
+                player.startTicking()
+            }
+        } else {
+            guard timer != nil, finishTime != nil else { return }
+            let remaining = max(0, Int(finishTime.timeIntervalSince(Date()).rounded()))
+            pausedRemainingSeconds = remaining
+            timer?.cancel()
+            timer = nil
+            isPaused = true
+            player.stopTicking()
+            // Hide menu-bar countdown while paused
+            TBStatusItem.shared.setTitle(title: nil)
+        }
+    }
+
     func updateTimeLeft() {
         timeLeftString = timerFormatter.string(from: Date(), to: finishTime)!
         if timer != nil, showTimerInMenuBar {
@@ -140,7 +171,7 @@ class TBTimer: ObservableObject {
     }
 
     private func stopTimer() {
-        timer!.cancel()
+        timer?.cancel()
         timer = nil
     }
 
@@ -179,12 +210,23 @@ class TBTimer: ObservableObject {
         TBStatusItem.shared.setIcon(name: .work)
         player.playWindup()
         player.startTicking()
+        currentWorkStart = Date()
         startTimer(seconds: workIntervalLength * 60)
     }
 
     private func onWorkFinish(context _: TBStateMachine.Context) {
         consecutiveWorkIntervals += 1
         player.playDing()
+        let end = Date()
+        let start = currentWorkStart ?? end.addingTimeInterval(-Double(workIntervalLength * 60))
+        let session = TBCompletedSession(
+            index: completedSessions.count + 1,
+            start: start,
+            end: end
+        )
+        completedSessions.append(session)
+        sessionsLogger.append(session: session)
+        currentWorkStart = nil
     }
 
     private func onWorkEnd(context _: TBStateMachine.Context) {
@@ -225,5 +267,8 @@ class TBTimer: ObservableObject {
         stopTimer()
         TBStatusItem.shared.setIcon(name: .idle)
         consecutiveWorkIntervals = 0
+        isPaused = false
+        pausedRemainingSeconds = 0
+        currentWorkStart = nil
     }
 }

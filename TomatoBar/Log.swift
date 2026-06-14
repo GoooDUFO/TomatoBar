@@ -29,7 +29,90 @@ class TBLogEventTransition: TBLogEvent {
 private let logFileName = "TomatoBar.log"
 private let lineEnd = "\n".data(using: .utf8)!
 
+/// Project-local sessions log folder. Personal build, hardcoded path on purpose.
+internal let sessionsLogsURL = URL(
+    fileURLWithPath: "/Users/abraham/Desktop/Sandbox/tomato-timer-custom/logs",
+    isDirectory: true
+)
+
 internal let logger = TBLogger()
+internal let sessionsLogger = TBSessionsLogger()
+
+struct TBCompletedSession: Codable, Identifiable {
+    let id: UUID
+    let index: Int
+    let start: Date
+    let end: Date
+
+    init(index: Int, start: Date, end: Date) {
+        self.id = UUID()
+        self.index = index
+        self.start = start
+        self.end = end
+    }
+}
+
+/// Reads the full persisted sessions history back from disk for the Stats dashboard.
+/// Read-only; never mutates the log. Returns [] on any error so the UI degrades gracefully.
+enum TBSessionsReader {
+    static func loadAll() -> [TBCompletedSession] {
+        let fileURL = sessionsLogsURL.appendingPathComponent("sessions.jsonl")
+        guard let data = try? Data(contentsOf: fileURL),
+              let text = String(data: data, encoding: .utf8) else {
+            return []
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var result: [TBCompletedSession] = []
+        for line in text.split(separator: "\n") {
+            guard let lineData = line.data(using: .utf8),
+                  let session = try? decoder.decode(TBCompletedSession.self, from: lineData) else {
+                continue
+            }
+            result.append(session)
+        }
+        return result
+    }
+}
+
+class TBSessionsLogger {
+    private let encoder = JSONEncoder()
+    private let fileURL: URL?
+
+    init() {
+        encoder.outputFormatting = .sortedKeys
+        encoder.dateEncodingStrategy = .iso8601
+
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(at: sessionsLogsURL,
+                                            withIntermediateDirectories: true)
+        } catch {
+            NSLog("TBSessionsLogger: cannot create sessions folder: \(error)")
+            fileURL = nil
+            return
+        }
+        fileURL = sessionsLogsURL.appendingPathComponent("sessions.jsonl")
+    }
+
+    func append(session: TBCompletedSession) {
+        guard let fileURL = fileURL else { return }
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: fileURL.path) {
+            fileManager.createFile(atPath: fileURL.path, contents: nil)
+        }
+        do {
+            let jsonData = try encoder.encode(session)
+            let handle = try FileHandle(forWritingTo: fileURL)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: jsonData + lineEnd)
+            try handle.synchronize()
+        } catch {
+            print("cannot write session log: \(error)")
+        }
+    }
+}
 
 class TBLogger {
     private let logHandle: FileHandle?
