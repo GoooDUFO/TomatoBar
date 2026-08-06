@@ -220,6 +220,146 @@ private struct TBStats {
     }
 }
 
+/// One cell of the month heatmap. `day == nil` is a leading blank pad.
+private struct TBMonthCell: Identifiable {
+    let id = UUID()
+    let day: Int?
+    let count: Int
+    let isToday: Bool
+}
+
+/// Per-month statistics for the Stats → Month scope.
+private struct TBMonthStats {
+    let title: String
+    let total: Int
+    let activeDays: Int
+    let bestCount: Int
+    let focusSeconds: Double
+    let cells: [TBMonthCell]
+    let maxCount: Int
+    let canGoForward: Bool
+
+    init(sessions: [TBCompletedSession], monthOffset: Int) {
+        let cal = Calendar.current
+        let now = Date()
+        let anchor = cal.date(byAdding: .month, value: monthOffset,
+                              to: cal.startOfDay(for: now)) ?? now
+        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: anchor)) ?? anchor
+        let daysInMonth = cal.range(of: .day, in: .month, for: monthStart)?.count ?? 30
+
+        let titleFormatter = DateFormatter()
+        titleFormatter.dateFormat = "LLLL yyyy"
+        title = titleFormatter.string(from: monthStart)
+
+        var counts: [Int: Int] = [:]
+        var focus: Double = 0
+        for session in sessions
+        where cal.isDate(session.end, equalTo: monthStart, toGranularity: .month) {
+            counts[cal.component(.day, from: session.end), default: 0] += 1
+            focus += max(0, session.end.timeIntervalSince(session.start))
+        }
+
+        total = counts.values.reduce(0, +)
+        activeDays = counts.count
+        bestCount = counts.values.max() ?? 0
+        focusSeconds = focus
+        maxCount = max(counts.values.max() ?? 0, 1)
+        canGoForward = monthOffset < 0
+
+        // Pad so day 1 lands under its real weekday column.
+        let pad = (cal.component(.weekday, from: monthStart) - cal.firstWeekday + 7) % 7
+        var built = (0 ..< pad).map { _ in TBMonthCell(day: nil, count: 0, isToday: false) }
+        let today = cal.startOfDay(for: now)
+        for day in 1 ... daysInMonth {
+            let date = cal.date(byAdding: .day, value: day - 1, to: monthStart)
+            built.append(TBMonthCell(day: day,
+                                     count: counts[day] ?? 0,
+                                     isToday: date.map { cal.isDate($0, inSameDayAs: today) } ?? false))
+        }
+        cells = built
+    }
+
+    var focusString: String {
+        let minutes = focusSeconds / 60
+        return minutes >= 60 ? String(format: "%.1fh", minutes / 60) : "\(Int(minutes.rounded()))m"
+    }
+
+    var averageString: String {
+        guard activeDays > 0 else { return "0" }
+        return String(format: "%.1f", Double(total) / Double(activeDays))
+    }
+}
+
+private struct MonthGrid: View {
+    let stats: TBMonthStats
+
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
+    }
+
+    private var weekdaySymbols: [String] {
+        let cal = Calendar.current
+        let symbols = cal.veryShortWeekdaySymbols
+        let offset = cal.firstWeekday - 1
+        return Array(symbols[offset...] + symbols[..<offset])
+    }
+
+    var body: some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 3) {
+                ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                    Text(symbol)
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(stats.cells) { cell in
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(fillColor(for: cell))
+                        if cell.isToday {
+                            RoundedRectangle(cornerRadius: 3)
+                                .strokeBorder(tomatoColor, lineWidth: 1)
+                        }
+                        if cell.count > 0 {
+                            Text("\(cell.count)")
+                                .font(.system(size: 8).monospacedDigit())
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .frame(height: 15)
+                    .opacity(cell.day == nil ? 0 : 1)
+                }
+            }
+        }
+    }
+
+    private func fillColor(for cell: TBMonthCell) -> Color {
+        guard cell.count > 0 else { return Color.gray.opacity(0.12) }
+        let ratio = Double(cell.count) / Double(stats.maxCount)
+        return tomatoColor.opacity(0.35 + 0.65 * ratio)
+    }
+}
+
+private struct CompactStat: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(value)
+                .font(.system(.callout, design: .rounded).weight(.semibold))
+                .foregroundColor(.primary)
+            Text(label)
+                .font(.system(size: 8))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 private struct StatCard: View {
     let value: String
     let label: String
@@ -306,8 +446,15 @@ private struct MiniStat: View {
     }
 }
 
+private enum StatsScope {
+    case week, month
+}
+
 private struct StatsView: View {
+    @State private var sessions: [TBCompletedSession] = []
     @State private var stats = TBStats.empty
+    @State private var scope = StatsScope.week
+    @State private var monthOffset = 0
     @State private var loaded = false
 
     private let captionFormatter: DateFormatter = {
@@ -315,6 +462,10 @@ private struct StatsView: View {
         df.dateFormat = "MMM d"
         return df
     }()
+
+    private var month: TBMonthStats {
+        TBMonthStats(sessions: sessions, monthOffset: monthOffset)
+    }
 
     var body: some View {
         Group {
@@ -331,40 +482,21 @@ private struct StatsView: View {
                 .frame(maxWidth: .infinity)
             } else {
                 VStack(spacing: 6) {
-                    HStack(spacing: 6) {
-                        StatCard(value: "\(stats.todayCount)",
-                                 label: NSLocalizedString("StatsView.today.label",
-                                                          comment: "Today label"),
-                                 systemImage: "sun.max.fill",
-                                 tint: tomatoColor)
-                        StatCard(value: "\(stats.weekCount)",
-                                 label: NSLocalizedString("StatsView.week.label",
-                                                          comment: "This week label"),
-                                 systemImage: "calendar")
+                    Picker("", selection: $scope) {
+                        Text(NSLocalizedString("StatsView.scope.week.label",
+                                               comment: "Week scope")).tag(StatsScope.week)
+                        Text(NSLocalizedString("StatsView.scope.month.label",
+                                               comment: "Month scope")).tag(StatsScope.month)
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
 
-                    WeekBarChart(week: stats.week)
-
-                    Divider()
-
-                    HStack(spacing: 4) {
-                        MiniStat(emoji: "🍅", value: "\(stats.totalCount)",
-                                 label: NSLocalizedString("StatsView.total.label",
-                                                          comment: "Total label"))
-                        MiniStat(emoji: "⏱", value: stats.focusString,
-                                 label: NSLocalizedString("StatsView.focus.label",
-                                                          comment: "Focus label"))
-                        MiniStat(emoji: "🔥", value: "\(stats.streak)",
-                                 label: NSLocalizedString("StatsView.streak.label",
-                                                          comment: "Streak label"))
-                    }
-
-                    if let first = stats.firstDate {
-                        Text(String.localizedStringWithFormat(
-                            NSLocalizedString("StatsView.since.label", comment: "Since label"),
-                            captionFormatter.string(from: first)))
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary)
+                    switch scope {
+                    case .week:
+                        weekContent
+                    case .month:
+                        monthContent
                     }
                     Spacer(minLength: 0)
                 }
@@ -372,8 +504,97 @@ private struct StatsView: View {
         }
         .padding(4)
         .onAppear {
-            stats = TBStats(from: TBSessionsReader.loadAll())
+            sessions = TBSessionsReader.loadAll()
+            stats = TBStats(from: sessions)
             loaded = true
+        }
+    }
+
+    private var weekContent: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                StatCard(value: "\(stats.todayCount)",
+                         label: NSLocalizedString("StatsView.today.label",
+                                                  comment: "Today label"),
+                         systemImage: "sun.max.fill",
+                         tint: tomatoColor)
+                StatCard(value: "\(stats.weekCount)",
+                         label: NSLocalizedString("StatsView.week.label",
+                                                  comment: "This week label"),
+                         systemImage: "calendar")
+            }
+
+            WeekBarChart(week: stats.week)
+
+            Divider()
+
+            HStack(spacing: 4) {
+                MiniStat(emoji: "🍅", value: "\(stats.totalCount)",
+                         label: NSLocalizedString("StatsView.total.label",
+                                                  comment: "Total label"))
+                MiniStat(emoji: "⏱", value: stats.focusString,
+                         label: NSLocalizedString("StatsView.focus.label",
+                                                  comment: "Focus label"))
+                MiniStat(emoji: "🔥", value: "\(stats.streak)",
+                         label: NSLocalizedString("StatsView.streak.label",
+                                                  comment: "Streak label"))
+            }
+
+            if let first = stats.firstDate {
+                Text(String.localizedStringWithFormat(
+                    NSLocalizedString("StatsView.since.label", comment: "Since label"),
+                    captionFormatter.string(from: first)))
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var monthContent: some View {
+        let stats = month
+        return VStack(spacing: 5) {
+            HStack {
+                Button {
+                    monthOffset -= 1
+                } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Text(stats.title)
+                    .font(.system(.caption).weight(.semibold))
+                Spacer()
+                Button {
+                    monthOffset += 1
+                } label: {
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .disabled(!stats.canGoForward)
+                .opacity(stats.canGoForward ? 1 : 0.25)
+            }
+
+            MonthGrid(stats: stats)
+
+            Divider()
+
+            HStack(spacing: 2) {
+                CompactStat(value: "\(stats.total)",
+                            label: NSLocalizedString("StatsView.total.label",
+                                                     comment: "Total label"))
+                CompactStat(value: "\(stats.activeDays)",
+                            label: NSLocalizedString("StatsView.activeDays.label",
+                                                     comment: "Active days label"))
+                CompactStat(value: "\(stats.bestCount)",
+                            label: NSLocalizedString("StatsView.best.label",
+                                                     comment: "Best day label"))
+                CompactStat(value: stats.averageString,
+                            label: NSLocalizedString("StatsView.average.label",
+                                                     comment: "Average label"))
+                CompactStat(value: stats.focusString,
+                            label: NSLocalizedString("StatsView.focus.label",
+                                                     comment: "Focus label"))
+            }
         }
     }
 }
@@ -425,6 +646,7 @@ private struct SessionsView: View {
             }
         }
         .padding(4)
+        .onAppear { timer.pruneSessionsIfNewDay() }
     }
 }
 
@@ -536,7 +758,10 @@ struct TBPopoverView: View {
                     SoundsView().environmentObject(timer.player)
                 }
             }
-            .frame(height: 210)
+            .frame(height: 252)
+            /* Hard clip: tab content can never spill over the picker or the
+               About/Quit rows, whatever its intrinsic height turns out to be. */
+            .clipped()
 
             Group {
                 Button {

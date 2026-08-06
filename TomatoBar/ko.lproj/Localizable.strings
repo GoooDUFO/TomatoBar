@@ -27,6 +27,11 @@
 "StatsView.focus.label" = "집중";
 "StatsView.streak.label" = "연속";
 "StatsView.since.label" = "%@ 부터";
+"StatsView.scope.week.label" = "주간";
+"StatsView.scope.month.label" = "월간";
+"StatsView.activeDays.label" = "일수";
+"StatsView.best.label" = "최고";
+"StatsView.average.label" = "평균";
 "TBPopoverView.settings.label" = "설정";
 "TBPopoverView.sounds.label" = "사운드";
 "SessionsView.empty.label" = "완료된 뽀모도로가 없습니다.\n타이머를 시작하세요.";

@@ -27,6 +27,11 @@
 "StatsView.focus.label" = "focus";
 "StatsView.streak.label" = "streak";
 "StatsView.since.label" = "Since %@";
+"StatsView.scope.week.label" = "Week";
+"StatsView.scope.month.label" = "Month";
+"StatsView.activeDays.label" = "days";
+"StatsView.best.label" = "best";
+"StatsView.average.label" = "avg/day";
 "TBPopoverView.settings.label" = "Settings";
 "TBPopoverView.sounds.label" = "Sounds";
 "SessionsView.empty.label" = "No completed pomodoros yet.\nStart the timer to begin.";

@@ -27,6 +27,11 @@
 "StatsView.focus.label" = "专注";
 "StatsView.streak.label" = "连续";
 "StatsView.since.label" = "自 %@ 起";
+"StatsView.scope.week.label" = "本周";
+"StatsView.scope.month.label" = "本月";
+"StatsView.activeDays.label" = "天数";
+"StatsView.best.label" = "最佳";
+"StatsView.average.label" = "日均";
 "TBPopoverView.settings.label" = "设置";
 "TBPopoverView.sounds.label" = "声音";
 "SessionsView.empty.label" = "还没有完成的番茄钟。\n开始计时器。";

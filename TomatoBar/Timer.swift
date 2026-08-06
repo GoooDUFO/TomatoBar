@@ -214,11 +214,21 @@ class TBTimer: ObservableObject {
         startTimer(seconds: workIntervalLength * 60)
     }
 
+    /// Clears the in-memory list once the calendar day rolls over, so numbering
+    /// restarts at #1 each day even when the app is never quit.
+    func pruneSessionsIfNewDay() {
+        guard let last = completedSessions.last else { return }
+        if !Calendar.current.isDate(last.end, inSameDayAs: Date()) {
+            completedSessions.removeAll()
+        }
+    }
+
     private func onWorkFinish(context _: TBStateMachine.Context) {
         consecutiveWorkIntervals += 1
         player.playDing()
         let end = Date()
         let start = currentWorkStart ?? end.addingTimeInterval(-Double(workIntervalLength * 60))
+        pruneSessionsIfNewDay()
         let session = TBCompletedSession(
             index: completedSessions.count + 1,
             start: start,
