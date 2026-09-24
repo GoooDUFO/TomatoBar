@@ -31,6 +31,14 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
     static var shared: TBStatusItem!
 
     func applicationDidFinishLaunching(_: Notification) {
+        // Ensure project-local sessions log folder exists from launch.
+        do {
+            try FileManager.default.createDirectory(at: sessionsLogsURL,
+                                                    withIntermediateDirectories: true)
+        } catch {
+            NSLog("TomatoBar: cannot create sessions folder: \(error)")
+        }
+
         let view = TBPopoverView()
 
         popover.behavior = .transient
@@ -38,7 +46,7 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         popover.contentViewController?.view = NSHostingView(rootView: view)
         if let contentViewController = popover.contentViewController {
             popover.contentSize.height = contentViewController.view.intrinsicContentSize.height
-            popover.contentSize.width = 240
+            popover.contentSize.width = 300
         }
 
         statusBarItem = NSStatusBar.system.statusItem(
@@ -49,17 +57,24 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         statusBarItem?.button?.action = #selector(TBStatusItem.togglePopover(_:))
     }
 
-    func setTitle(title: String?) {
+    /// `invisible` still lays the title out (so the item keeps its width) but draws nothing.
+    func setTitle(title: String?, dimmed: Bool = false, invisible: Bool = false) {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineHeightMultiple = 0.9
         paragraphStyle.alignment = NSTextAlignment.center
 
+        var attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key.font: digitFont,
+            NSAttributedString.Key.paragraphStyle: paragraphStyle
+        ]
+        if invisible {
+            attributes[.foregroundColor] = NSColor.clear
+        } else if dimmed {
+            attributes[.foregroundColor] = NSColor.secondaryLabelColor
+        }
         let attributedTitle = NSAttributedString(
             string: title != nil ? " \(title!)" : "",
-            attributes: [
-                NSAttributedString.Key.font: digitFont,
-                NSAttributedString.Key.paragraphStyle: paragraphStyle
-            ]
+            attributes: attributes
         )
         statusBarItem?.button?.attributedTitle = attributedTitle
     }

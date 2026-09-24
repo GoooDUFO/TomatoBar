@@ -18,8 +18,13 @@ class TBTimer: ObservableObject {
     private var notificationCenter = TBNotificationCenter()
     private var finishTime: Date!
     private var timerFormatter = DateComponentsFormatter()
+    private var currentWorkStart: Date?
+    private var pausedRemainingSeconds: Int = 0
     @Published var timeLeftString: String = ""
     @Published var timer: DispatchSourceTimer?
+    @Published var isPaused: Bool = false
+    @Published var completedSessions: [TBCompletedSession] = []
+    private var dayChangeObservers: [NSObjectProtocol] = []
 
     init() {
         /*
@@ -83,6 +88,27 @@ class TBTimer: ObservableObject {
                             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
                             forEventClass: AEEventClass(kInternetEventClass),
                             andEventID: AEEventID(kAEGetURL))
+
+        // Today's sessions survive an app relaunch: rebuild the list from the log.
+        completedSessions = TBSessionsReader.loadAll()
+            .filter { Calendar.current.isDateInToday($0.end) }
+            .sorted { $0.end < $1.end }
+
+        // Drop yesterday's sessions whenever the day may have rolled over while
+        // the app stayed open: at midnight, on wake from sleep, and each time
+        // the popover opens (its views stay alive, so onAppear alone is not enough).
+        let prune: (Notification) -> Void = { [weak self] _ in self?.pruneSessionsIfNewDay() }
+        dayChangeObservers = [
+            NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil,
+                                                   queue: .main, using: prune),
+            NotificationCenter.default.addObserver(forName: NSPopover.willShowNotification, object: nil,
+                                                   queue: .main, using: prune),
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                              object: nil, queue: .main, using: prune),
+        ]
+
+        // The status item does not exist yet during init; set the idle title once it does.
+        DispatchQueue.main.async { [weak self] in self?.updateTimeLeft() }
     }
 
     @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor,
@@ -119,12 +145,59 @@ class TBTimer: ObservableObject {
         stateMachine <-! .skipRest
     }
 
-    func updateTimeLeft() {
-        timeLeftString = timerFormatter.string(from: Date(), to: finishTime)!
-        if timer != nil, showTimerInMenuBar {
-            TBStatusItem.shared.setTitle(title: timeLeftString)
+    func pauseResume() {
+        if isPaused {
+            // Resume: rebuild the timer with the saved remaining seconds
+            finishTime = Date().addingTimeInterval(TimeInterval(pausedRemainingSeconds))
+            let queue = DispatchQueue(label: "Timer")
+            timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+            timer!.schedule(deadline: .now(), repeating: .seconds(1), leeway: .never)
+            timer!.setEventHandler(handler: onTimerTick)
+            timer!.setCancelHandler(handler: onTimerCancel)
+            timer!.resume()
+            isPaused = false
+            if stateMachine.state == .work {
+                player.startTicking()
+            }
         } else {
+            guard timer != nil, finishTime != nil else { return }
+            let remaining = max(0, Int(finishTime.timeIntervalSince(Date()).rounded()))
+            pausedRemainingSeconds = remaining
+            timer?.cancel()
+            timer = nil
+            isPaused = true
+            player.stopTicking()
+            refreshMenuBarTitle()
+        }
+    }
+
+    func updateTimeLeft() {
+        if timer != nil, let finishTime = finishTime {
+            timeLeftString = timerFormatter.string(from: Date(), to: finishTime)!
+        }
+        refreshMenuBarTitle()
+    }
+
+    /*
+     While "Show timer in menu bar" is on, the title always occupies an "MM:SS"
+     slot: running shows the countdown, paused shows the frozen time dimmed, and
+     idle lays out an invisible placeholder so only the icon is seen. The
+     formatter always yields "MM:SS" and the font has monospaced digits, so the
+     status item keeps one width in every state and the neighbouring menu bar
+     icons never shift when the timer starts or stops.
+     */
+    func refreshMenuBarTitle() {
+        guard showTimerInMenuBar else {
             TBStatusItem.shared.setTitle(title: nil)
+            return
+        }
+        if timer != nil {
+            TBStatusItem.shared.setTitle(title: timeLeftString)
+        } else if isPaused {
+            TBStatusItem.shared.setTitle(title: timeLeftString, dimmed: true)
+        } else {
+            let placeholder = timerFormatter.string(from: TimeInterval(workIntervalLength * 60))
+            TBStatusItem.shared.setTitle(title: placeholder, invisible: true)
         }
     }
 
@@ -140,7 +213,7 @@ class TBTimer: ObservableObject {
     }
 
     private func stopTimer() {
-        timer!.cancel()
+        timer?.cancel()
         timer = nil
     }
 
@@ -179,12 +252,34 @@ class TBTimer: ObservableObject {
         TBStatusItem.shared.setIcon(name: .work)
         player.playWindup()
         player.startTicking()
+        currentWorkStart = Date()
+        pruneSessionsIfNewDay()
         startTimer(seconds: workIntervalLength * 60)
+    }
+
+    /// Keeps only today's sessions, so the Sessions tab and numbering restart
+    /// at #1 each day even when the app is never quit.
+    func pruneSessionsIfNewDay() {
+        let calendar = Calendar.current
+        if completedSessions.contains(where: { !calendar.isDateInToday($0.end) }) {
+            completedSessions.removeAll { !calendar.isDateInToday($0.end) }
+        }
     }
 
     private func onWorkFinish(context _: TBStateMachine.Context) {
         consecutiveWorkIntervals += 1
         player.playDing()
+        let end = Date()
+        let start = currentWorkStart ?? end.addingTimeInterval(-Double(workIntervalLength * 60))
+        pruneSessionsIfNewDay()
+        let session = TBCompletedSession(
+            index: completedSessions.count + 1,
+            start: start,
+            end: end
+        )
+        completedSessions.append(session)
+        sessionsLogger.append(session: session)
+        currentWorkStart = nil
     }
 
     private func onWorkEnd(context _: TBStateMachine.Context) {
@@ -225,5 +320,8 @@ class TBTimer: ObservableObject {
         stopTimer()
         TBStatusItem.shared.setIcon(name: .idle)
         consecutiveWorkIntervals = 0
+        isPaused = false
+        pausedRemainingSeconds = 0
+        currentWorkStart = nil
     }
 }
