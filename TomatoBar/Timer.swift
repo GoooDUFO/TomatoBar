@@ -24,6 +24,7 @@ class TBTimer: ObservableObject {
     @Published var timer: DispatchSourceTimer?
     @Published var isPaused: Bool = false
     @Published var completedSessions: [TBCompletedSession] = []
+    private var dayChangeObservers: [NSObjectProtocol] = []
 
     init() {
         /*
@@ -87,6 +88,27 @@ class TBTimer: ObservableObject {
                             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
                             forEventClass: AEEventClass(kInternetEventClass),
                             andEventID: AEEventID(kAEGetURL))
+
+        // Today's sessions survive an app relaunch: rebuild the list from the log.
+        completedSessions = TBSessionsReader.loadAll()
+            .filter { Calendar.current.isDateInToday($0.end) }
+            .sorted { $0.end < $1.end }
+
+        // Drop yesterday's sessions whenever the day may have rolled over while
+        // the app stayed open: at midnight, on wake from sleep, and each time
+        // the popover opens (its views stay alive, so onAppear alone is not enough).
+        let prune: (Notification) -> Void = { [weak self] _ in self?.pruneSessionsIfNewDay() }
+        dayChangeObservers = [
+            NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil,
+                                                   queue: .main, using: prune),
+            NotificationCenter.default.addObserver(forName: NSPopover.willShowNotification, object: nil,
+                                                   queue: .main, using: prune),
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                              object: nil, queue: .main, using: prune),
+        ]
+
+        // The status item does not exist yet during init; set the idle title once it does.
+        DispatchQueue.main.async { [weak self] in self?.updateTimeLeft() }
     }
 
     @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor,
@@ -145,17 +167,36 @@ class TBTimer: ObservableObject {
             timer = nil
             isPaused = true
             player.stopTicking()
-            // Hide menu-bar countdown while paused
-            TBStatusItem.shared.setTitle(title: nil)
+            refreshMenuBarTitle()
         }
     }
 
     func updateTimeLeft() {
-        timeLeftString = timerFormatter.string(from: Date(), to: finishTime)!
-        if timer != nil, showTimerInMenuBar {
-            TBStatusItem.shared.setTitle(title: timeLeftString)
-        } else {
+        if timer != nil, let finishTime = finishTime {
+            timeLeftString = timerFormatter.string(from: Date(), to: finishTime)!
+        }
+        refreshMenuBarTitle()
+    }
+
+    /*
+     While "Show timer in menu bar" is on, the title is never empty: running shows
+     the countdown, paused shows the frozen time, and idle previews the next work
+     interval, the latter two dimmed. The formatter always yields "MM:SS" and the
+     font has monospaced digits, so the status item keeps one width in every state
+     and the neighbouring menu bar icons never shift.
+     */
+    func refreshMenuBarTitle() {
+        guard showTimerInMenuBar else {
             TBStatusItem.shared.setTitle(title: nil)
+            return
+        }
+        if timer != nil {
+            TBStatusItem.shared.setTitle(title: timeLeftString)
+        } else if isPaused {
+            TBStatusItem.shared.setTitle(title: timeLeftString, dimmed: true)
+        } else {
+            let idle = timerFormatter.string(from: TimeInterval(workIntervalLength * 60))
+            TBStatusItem.shared.setTitle(title: idle, dimmed: true)
         }
     }
 
@@ -211,15 +252,16 @@ class TBTimer: ObservableObject {
         player.playWindup()
         player.startTicking()
         currentWorkStart = Date()
+        pruneSessionsIfNewDay()
         startTimer(seconds: workIntervalLength * 60)
     }
 
-    /// Clears the in-memory list once the calendar day rolls over, so numbering
-    /// restarts at #1 each day even when the app is never quit.
+    /// Keeps only today's sessions, so the Sessions tab and numbering restart
+    /// at #1 each day even when the app is never quit.
     func pruneSessionsIfNewDay() {
-        guard let last = completedSessions.last else { return }
-        if !Calendar.current.isDate(last.end, inSameDayAs: Date()) {
-            completedSessions.removeAll()
+        let calendar = Calendar.current
+        if completedSessions.contains(where: { !calendar.isDateInToday($0.end) }) {
+            completedSessions.removeAll { !calendar.isDateInToday($0.end) }
         }
     }
 

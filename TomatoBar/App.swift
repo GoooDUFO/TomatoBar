@@ -57,17 +57,21 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         statusBarItem?.button?.action = #selector(TBStatusItem.togglePopover(_:))
     }
 
-    func setTitle(title: String?) {
+    func setTitle(title: String?, dimmed: Bool = false) {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineHeightMultiple = 0.9
         paragraphStyle.alignment = NSTextAlignment.center
 
+        var attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key.font: digitFont,
+            NSAttributedString.Key.paragraphStyle: paragraphStyle
+        ]
+        if dimmed {
+            attributes[.foregroundColor] = NSColor.secondaryLabelColor
+        }
         let attributedTitle = NSAttributedString(
             string: title != nil ? " \(title!)" : "",
-            attributes: [
-                NSAttributedString.Key.font: digitFont,
-                NSAttributedString.Key.paragraphStyle: paragraphStyle
-            ]
+            attributes: attributes
         )
         statusBarItem?.button?.attributedTitle = attributedTitle
     }

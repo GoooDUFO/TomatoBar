@@ -20,6 +20,10 @@ private struct IntervalsView: View {
                     Text(String.localizedStringWithFormat(minStr, timer.workIntervalLength))
                 }
             }
+            // The idle menu bar title previews this length; keep it current.
+            .onChange(of: timer.workIntervalLength) { _ in
+                timer.updateTimeLeft()
+            }
             Stepper(value: $timer.shortRestIntervalLength, in: 1 ... 60) {
                 HStack {
                     Text(NSLocalizedString("IntervalsView.shortRestIntervalLength.label",
@@ -503,11 +507,18 @@ private struct StatsView: View {
             }
         }
         .padding(4)
-        .onAppear {
-            sessions = TBSessionsReader.loadAll()
-            stats = TBStats(from: sessions)
-            loaded = true
+        .onAppear(perform: reload)
+        // The popover keeps this view alive between openings; reload so "Today"
+        // and the charts include sessions finished since it was last shown.
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
+            reload()
         }
+    }
+
+    private func reload() {
+        sessions = TBSessionsReader.loadAll()
+        stats = TBStats(from: sessions)
+        loaded = true
     }
 
     private var weekContent: some View {
@@ -622,9 +633,11 @@ private struct SessionsView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 4) {
-                        ForEach(timer.completedSessions) { session in
+                        // Number by position: sessions reloaded from the log after a
+                        // relaunch may carry indices from an older numbering scheme.
+                        ForEach(Array(timer.completedSessions.enumerated()), id: \.element.id) { position, session in
                             HStack {
-                                Text("🍅 #\(session.index)")
+                                Text("🍅 #\(position + 1)")
                                     .font(.system(.body).monospacedDigit())
                                 Spacer()
                                 Text("\(timeFormatter.string(from: session.start))–\(timeFormatter.string(from: session.end))")
