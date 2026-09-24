@@ -179,11 +179,12 @@ class TBTimer: ObservableObject {
     }
 
     /*
-     While "Show timer in menu bar" is on, the title is never empty: running shows
-     the countdown, paused shows the frozen time, and idle previews the next work
-     interval, the latter two dimmed. The formatter always yields "MM:SS" and the
-     font has monospaced digits, so the status item keeps one width in every state
-     and the neighbouring menu bar icons never shift.
+     While "Show timer in menu bar" is on, the title always occupies an "MM:SS"
+     slot: running shows the countdown, paused shows the frozen time dimmed, and
+     idle lays out an invisible placeholder so only the icon is seen. The
+     formatter always yields "MM:SS" and the font has monospaced digits, so the
+     status item keeps one width in every state and the neighbouring menu bar
+     icons never shift when the timer starts or stops.
      */
     func refreshMenuBarTitle() {
         guard showTimerInMenuBar else {
@@ -195,8 +196,8 @@ class TBTimer: ObservableObject {
         } else if isPaused {
             TBStatusItem.shared.setTitle(title: timeLeftString, dimmed: true)
         } else {
-            let idle = timerFormatter.string(from: TimeInterval(workIntervalLength * 60))
-            TBStatusItem.shared.setTitle(title: idle, dimmed: true)
+            let placeholder = timerFormatter.string(from: TimeInterval(workIntervalLength * 60))
+            TBStatusItem.shared.setTitle(title: placeholder, invisible: true)
         }
     }
 

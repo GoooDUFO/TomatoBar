@@ -57,7 +57,8 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         statusBarItem?.button?.action = #selector(TBStatusItem.togglePopover(_:))
     }
 
-    func setTitle(title: String?, dimmed: Bool = false) {
+    /// `invisible` still lays the title out (so the item keeps its width) but draws nothing.
+    func setTitle(title: String?, dimmed: Bool = false, invisible: Bool = false) {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineHeightMultiple = 0.9
         paragraphStyle.alignment = NSTextAlignment.center
@@ -66,7 +67,9 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
             NSAttributedString.Key.font: digitFont,
             NSAttributedString.Key.paragraphStyle: paragraphStyle
         ]
-        if dimmed {
+        if invisible {
+            attributes[.foregroundColor] = NSColor.clear
+        } else if dimmed {
             attributes[.foregroundColor] = NSColor.secondaryLabelColor
         }
         let attributedTitle = NSAttributedString(
