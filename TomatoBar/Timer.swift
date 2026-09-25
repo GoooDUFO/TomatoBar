@@ -89,10 +89,22 @@ class TBTimer: ObservableObject {
                             forEventClass: AEEventClass(kInternetEventClass),
                             andEventID: AEEventID(kAEGetURL))
 
-        // Today's sessions survive an app relaunch: rebuild the list from the log.
-        completedSessions = TBSessionsReader.loadAll()
-            .filter { Calendar.current.isDateInToday($0.end) }
-            .sorted { $0.end < $1.end }
+        /*
+         Today's sessions survive an app relaunch: rebuild the list from the log.
+         Read it off the main thread: the log lives under ~/Desktop, and while macOS
+         waits on a Desktop-access consent prompt the read blocks, which would stall
+         launch before the menu bar item even appears.
+         */
+        DispatchQueue.global(qos: .userInitiated).async {
+            let today = TBSessionsReader.loadAll().filter { Calendar.current.isDateInToday($0.end) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                // Keep anything recorded while the log was still loading.
+                let loaded = Set(today.map(\.id))
+                self.completedSessions = (today + self.completedSessions.filter { !loaded.contains($0.id) })
+                    .sorted { $0.end < $1.end }
+            }
+        }
 
         // Drop yesterday's sessions whenever the day may have rolled over while
         // the app stayed open: at midnight, on wake from sleep, and each time
@@ -106,9 +118,6 @@ class TBTimer: ObservableObject {
             NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                               object: nil, queue: .main, using: prune),
         ]
-
-        // The status item does not exist yet during init; set the idle title once it does.
-        DispatchQueue.main.async { [weak self] in self?.updateTimeLeft() }
     }
 
     @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor,
@@ -167,37 +176,17 @@ class TBTimer: ObservableObject {
             timer = nil
             isPaused = true
             player.stopTicking()
-            refreshMenuBarTitle()
+            // Hide menu-bar countdown while paused
+            TBStatusItem.shared.setTitle(title: nil)
         }
     }
 
     func updateTimeLeft() {
-        if timer != nil, let finishTime = finishTime {
-            timeLeftString = timerFormatter.string(from: Date(), to: finishTime)!
-        }
-        refreshMenuBarTitle()
-    }
-
-    /*
-     While "Show timer in menu bar" is on, the title always occupies an "MM:SS"
-     slot: running shows the countdown, paused shows the frozen time dimmed, and
-     idle lays out an invisible placeholder so only the icon is seen. The
-     formatter always yields "MM:SS" and the font has monospaced digits, so the
-     status item keeps one width in every state and the neighbouring menu bar
-     icons never shift when the timer starts or stops.
-     */
-    func refreshMenuBarTitle() {
-        guard showTimerInMenuBar else {
-            TBStatusItem.shared.setTitle(title: nil)
-            return
-        }
-        if timer != nil {
+        timeLeftString = timerFormatter.string(from: Date(), to: finishTime)!
+        if timer != nil, showTimerInMenuBar {
             TBStatusItem.shared.setTitle(title: timeLeftString)
-        } else if isPaused {
-            TBStatusItem.shared.setTitle(title: timeLeftString, dimmed: true)
         } else {
-            let placeholder = timerFormatter.string(from: TimeInterval(workIntervalLength * 60))
-            TBStatusItem.shared.setTitle(title: placeholder, invisible: true)
+            TBStatusItem.shared.setTitle(title: nil)
         }
     }
 

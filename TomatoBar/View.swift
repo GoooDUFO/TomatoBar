@@ -20,10 +20,6 @@ private struct IntervalsView: View {
                     Text(String.localizedStringWithFormat(minStr, timer.workIntervalLength))
                 }
             }
-            // The idle menu bar title previews this length; keep it current.
-            .onChange(of: timer.workIntervalLength) { _ in
-                timer.updateTimeLeft()
-            }
             Stepper(value: $timer.shortRestIntervalLength, in: 1 ... 60) {
                 HStack {
                     Text(NSLocalizedString("IntervalsView.shortRestIntervalLength.label",
@@ -128,6 +124,14 @@ private struct SoundsView: View {
         Spacer().frame(minHeight: 0)
     }
 }
+
+/*
+ Width of the popover's content, excluding its 12pt padding on each side. It must
+ fit the five-segment tab picker at its widest: the segmented control can't shrink,
+ and on macOS 27 it grows from 353pt to 390pt once the popover window becomes
+ active, which used to widen the whole popover on the first hover.
+ */
+let popoverContentWidth: CGFloat = 390
 
 private enum ChildView {
     case intervals, settings, sounds, sessions, stats
@@ -814,8 +818,8 @@ struct TBPopoverView: View {
                 }
             )
         #endif
-            /* Use values from GeometryReader */
-//            .frame(width: 240, height: 276)
+            // Pin the width so nothing can resize the popover (see popoverContentWidth).
+            .frame(width: popoverContentWidth)
             .padding(12)
     }
 }
