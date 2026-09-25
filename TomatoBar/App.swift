@@ -40,13 +40,16 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         }
 
         let view = TBPopoverView()
+        let hostingView = NSHostingView(rootView: view)
 
         popover.behavior = .transient
         popover.contentViewController = NSViewController()
-        popover.contentViewController?.view = NSHostingView(rootView: view)
-        if let contentViewController = popover.contentViewController {
-            popover.contentSize.height = contentViewController.view.intrinsicContentSize.height
-            popover.contentSize.width = 300
+        popover.contentViewController?.view = hostingView
+        // Size the popover once from the fixed-width content, then stop the
+        // hosting view from resizing it as SwiftUI's ideal size changes.
+        popover.contentSize = hostingView.intrinsicContentSize
+        if #available(macOS 13.0, *) {
+            hostingView.sizingOptions = []
         }
 
         statusBarItem = NSStatusBar.system.statusItem(
@@ -57,24 +60,17 @@ class TBStatusItem: NSObject, NSApplicationDelegate {
         statusBarItem?.button?.action = #selector(TBStatusItem.togglePopover(_:))
     }
 
-    /// `invisible` still lays the title out (so the item keeps its width) but draws nothing.
-    func setTitle(title: String?, dimmed: Bool = false, invisible: Bool = false) {
+    func setTitle(title: String?) {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineHeightMultiple = 0.9
         paragraphStyle.alignment = NSTextAlignment.center
 
-        var attributes: [NSAttributedString.Key: Any] = [
-            NSAttributedString.Key.font: digitFont,
-            NSAttributedString.Key.paragraphStyle: paragraphStyle
-        ]
-        if invisible {
-            attributes[.foregroundColor] = NSColor.clear
-        } else if dimmed {
-            attributes[.foregroundColor] = NSColor.secondaryLabelColor
-        }
         let attributedTitle = NSAttributedString(
             string: title != nil ? " \(title!)" : "",
-            attributes: attributes
+            attributes: [
+                NSAttributedString.Key.font: digitFont,
+                NSAttributedString.Key.paragraphStyle: paragraphStyle
+            ]
         )
         statusBarItem?.button?.attributedTitle = attributedTitle
     }
